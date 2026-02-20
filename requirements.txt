@@ -1,0 +1,10 @@
+# Core (Phase 1)
+pdfplumber>=0.10.0
+openpyxl>=3.1.0
+python-docx>=1.1.0
+Pillow>=10.0.0
+
+# LLM providers — optional, only needed for Phase 2 (--llm flag)
+# Uncomment the provider(s) you plan to use:
+# openai>=1.0.0
+# anthropic>=0.30.0

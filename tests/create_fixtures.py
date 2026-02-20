@@ -1,10 +1,12 @@
-"""Generate minimal test fixtures (two .xlsx and two .docx files) for smoke-testing."""
+"""Generate minimal test fixtures (.xlsx, .docx, .pptx) for smoke-testing."""
 
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import openpyxl
 from docx import Document
+from pptx import Presentation
+from pptx.util import Inches, Pt
 
 OUT = os.path.join(os.path.dirname(__file__), "fixtures")
 os.makedirs(OUT, exist_ok=True)
@@ -82,7 +84,60 @@ def make_word():
     d2.save(os.path.join(OUT, "summary_v2.docx"))
 
 
+def make_pptx():
+    prs = Presentation()
+    layout = prs.slide_layouts[1]
+
+    slide1 = prs.slides.add_slide(layout)
+    slide1.shapes.title.text = "Q3 2025 Business Review"
+    slide1.placeholders[1].text = (
+        "Prepared by: Carol Davis\n"
+        "Period: Q3 2025 (Jul–Sep)\n"
+        "Total Revenue: $4.2M\n"
+        "Operating Margin: 18.5%\n"
+        "Headcount: 342\n"
+        "Customer NPS: 72"
+    )
+
+    slide2 = prs.slides.add_slide(prs.slide_layouts[5])
+    slide2.shapes.title.text = "Regional Performance"
+    rows, cols = 5, 4
+    left = Inches(0.5)
+    top = Inches(1.8)
+    width = Inches(9.0)
+    height = Inches(2.5)
+    table = slide2.shapes.add_table(rows, cols, left, top, width, height).table
+    headers = ["Region", "Revenue", "Growth %", "Headcount"]
+    for ci, h in enumerate(headers):
+        table.cell(0, ci).text = h
+    data = [
+        ["North America", "$2.1M", "12%", "180"],
+        ["Europe", "$1.3M", "8%", "95"],
+        ["Asia-Pacific", "$0.6M", "22%", "45"],
+        ["Latin America", "$0.2M", "5%", "22"],
+    ]
+    for ri, row in enumerate(data, start=1):
+        for ci, val in enumerate(row):
+            table.cell(ri, ci).text = val
+
+    slide3 = prs.slides.add_slide(prs.slide_layouts[1])
+    slide3.shapes.title.text = "Key Metrics"
+    slide3.placeholders[1].text = (
+        "Customer Acquisition Cost: $145\n"
+        "Lifetime Value: $2,800\n"
+        "LTV/CAC Ratio: 19.3:1\n"
+        "Monthly Churn Rate: 1.2%\n"
+        "ARR: $16.8M\n"
+        "Burn Rate: $380K/month\n"
+        "Runway: 18 months\n"
+        "Contact: carol@corp.com | 555-234-5678"
+    )
+
+    prs.save(os.path.join(OUT, "deck_q3.pptx"))
+
+
 if __name__ == "__main__":
     make_excel()
     make_word()
+    make_pptx()
     print("Fixtures created in", OUT)

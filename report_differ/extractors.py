@@ -1,5 +1,6 @@
 """
-Document content extractors for PDF, Excel (.xlsx), and Word (.docx) files.
+Document content extractors for PDF, Excel (.xlsx), Word (.docx), and
+PowerPoint (.pptx) files.
 
 Each extractor returns a normalised `DocumentContent` dataclass so the rest of
 the pipeline is format-agnostic.
@@ -14,6 +15,8 @@ from typing import List, Optional
 import pdfplumber
 import openpyxl
 from docx import Document as DocxDocument
+from pptx import Presentation as PptxPresentation
+from pptx.util import Inches
 
 
 @dataclass
@@ -132,6 +135,45 @@ def extract_word(path: str) -> DocumentContent:
 
 
 # ---------------------------------------------------------------------------
+# PowerPoint (.pptx)
+# ---------------------------------------------------------------------------
+
+def extract_pptx(path: str) -> DocumentContent:
+    doc = DocumentContent(filename=os.path.basename(path), format="pptx")
+    prs = PptxPresentation(path)
+
+    for slide_num, slide in enumerate(prs.slides, start=1):
+        slide_texts: List[str] = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        slide_texts.append(text)
+
+            if shape.has_table:
+                tbl = shape.table
+                rows_raw = []
+                for row in tbl.rows:
+                    rows_raw.append([_clean(cell.text) for cell in row.cells])
+                if rows_raw:
+                    headers = rows_raw[0]
+                    rows = rows_raw[1:]
+                    doc.tables.append(
+                        TableData(
+                            sheet_or_page=f"Slide {slide_num}",
+                            headers=headers,
+                            rows=rows,
+                        )
+                    )
+
+        if slide_texts:
+            doc.text_blocks.append("\n".join(slide_texts))
+
+    return doc
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -139,6 +181,7 @@ SUPPORTED_EXTENSIONS = {
     ".pdf": extract_pdf,
     ".xlsx": extract_excel,
     ".docx": extract_word,
+    ".pptx": extract_pptx,
 }
 
 

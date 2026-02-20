@@ -2,6 +2,7 @@
 pdfplumber>=0.10.0
 openpyxl>=3.1.0
 python-docx>=1.1.0
+python-pptx>=0.6.23
 Pillow>=10.0.0
 
 # LLM providers — optional, only needed for Phase 2 (--llm flag)

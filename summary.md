@@ -2,17 +2,31 @@
 
 ## Overview
 
-**`report-differ`** is a four-stage Python pipeline that mechanically compares two versions of the same business report and produces a neutral, factual diff summary. It supports PDF, Excel, and Word formats, redacts PII by default, and does not rely on any business definitions or semantic knowledge.
+**`report-differ`** is a modular Python toolkit that can **compare two versions** of a business report (diff), **summarise a single report**, or **extract metadata, KPIs, and metrics** — producing concise, neutral, factual output. It supports PDF, Excel, Word, and PowerPoint formats, redacts PII by default, and does not rely on any business definitions or semantic knowledge.
 
 ---
 
-## Pipeline Flow
+## Pipeline Flows
+
+### Diff (two-document comparison)
 
 ```
 extract  →  redact  →  compare  →  summarise
 ```
 
-Each stage is a standalone module. The output of one feeds directly into the next. The CLI (`cli.py`) orchestrates the full flow.
+### Summarise (single-document overview)
+
+```
+extract  →  redact  →  profile & summarise
+```
+
+### Extract Metrics (KPIs, metrics, and metadata)
+
+```
+extract  →  redact  →  detect metrics  →  format output
+```
+
+Each stage is a standalone module. The CLI orchestrates the full flow.
 
 ---
 
@@ -20,7 +34,7 @@ Each stage is a standalone module. The output of one feeds directly into the nex
 
 ### 1. `extractors.py` — Document Parsing
 
-Parses PDF (via `pdfplumber`), Excel (via `openpyxl`), and Word (via `python-docx`) files into a unified `DocumentContent` dataclass containing:
+Parses PDF (via `pdfplumber`), Excel (via `openpyxl`), Word (via `python-docx`), and PowerPoint (via `python-pptx`) files into a unified `DocumentContent` dataclass containing:
 
 - **`text_blocks`** — list of plain-text strings (one per paragraph or page).
 - **`tables`** — list of `TableData` objects, each carrying a location label, a header row, and data rows.
@@ -77,16 +91,93 @@ Converts the list of `Difference` records into readable output. Two formats:
 - **Plain text** — grouped by section, with `+` / `-` / `~` markers and indented old/new values. Long values are capped at 120 characters.
 - **JSON** — structured array of difference objects with a `total_changes` count, suitable for downstream automation.
 
-### 5. `cli.py` — CLI Orchestration
+### 5. `report_summariser.py` — Single-Report Summary (Code-Based)
 
-Wires the full pipeline behind an `argparse` interface.
+Accepts a `DocumentContent` object and produces an extractive, factual summary:
+
+- **Key factual lines** — lines containing numbers, currency amounts, dates, or
+  percentages are identified via regex and surfaced verbatim as high-information
+  content.
+- **Table profiles** — for each table: location, headers, row count, and for
+  numeric columns: min, max, and sum.
+- **Full data reproduction** — tables with 20 or fewer rows are reproduced
+  row-by-row so every data point is visible.
+- **Two output formats** — plain text or JSON.
+
+No LLM, no interpretation — purely extractive.
+
+### 6. `llm_report_summariser.py` — Single-Report Summary (LLM-Enhanced)
+
+Sends the extracted, PII-redacted document content to an LLM (OpenAI or
+Anthropic) with a tightly constrained prompt that demands:
+
+- Only reference data present in the JSON input.
+- Quote every number exactly as it appears.
+- Produce structured output: Document Overview, Key Figures, Text Content
+  Summary, Table Summaries, and Structural Overview.
+- Accuracy checks: the prompt instructs the model to double-check every number
+  against the source JSON.
+
+Falls back to the mechanical summary if the LLM call fails.
+
+### 7. `cli.py` — CLI for Diff
+
+Wires the diff pipeline behind an `argparse` interface.
 
 Flags:
 - `--format plain|json` — output format (default: `plain`)
 - `--no-redact` — skip PII redaction (not recommended for production)
 - `--output FILE` — write to file instead of stdout
-- `--llm openai|anthropic` — (Phase 2) run the mechanical diff through an LLM for a more polished, categorised analysis
-- `--llm-model MODEL` — (Phase 2) override the default model name
+- `--llm openai|anthropic` — LLM-enhanced diff analysis
+- `--llm-model MODEL` — override the default model name
+
+### 8. `summarise_report.py` — CLI for Summarise
+
+Separate CLI for single-report summarisation.
+
+Flags:
+- `--format plain|json` — output format (default: `plain`)
+- `--no-redact` — skip PII redaction
+- `--output FILE` — write to file instead of stdout
+- `--llm openai|anthropic` — LLM-enhanced summary
+- `--llm-model MODEL` — override the default model name
+
+### 9. `metric_extractor.py` — KPI / Metric Extraction (Code-Based)
+
+Scans extracted document content and identifies three categories:
+
+- **Document metadata** — file properties, structure stats, all dates found.
+- **Inline metrics** — labelled numeric values detected in text via regex
+  (e.g. "Revenue: $1.2M", "Growth: 14%", "LTV/CAC Ratio: 19.3:1"). Each
+  metric is extracted with its label, raw value, parsed numeric value, unit
+  (USD/EUR/GBP/percent/ratio/number), and source line number.
+- **Tabular metrics** — every numeric cell in every table, enriched with the
+  column header and row label for context.
+
+Detection patterns:
+- `Label: $1,234.56` or `Label = 14.5%` (labelled metric)
+- Currency amounts with symbol ($, €, £, ¥, ₹)
+- Percentages, ratios (X:Y)
+- Multiplier suffixes (K, M, B, million, billion, thousand)
+
+### 10. `llm_metric_extractor.py` — KPI / Metric Extraction (LLM-Enhanced)
+
+Sends extracted, PII-redacted content to an LLM with a strict prompt that:
+- Identifies metrics the regex engine might miss (split across lines, implied
+  units, composite KPIs in prose).
+- Produces a consolidated KPI summary table.
+- Falls back to mechanical extraction if the LLM call fails.
+
+### 11. `extract_metrics.py` — CLI for Metric Extraction
+
+CLI entry point for the metric extraction capability.
+
+Flags:
+- `--format plain|json` — output format (default: `plain`)
+- `--no-redact` — skip PII redaction
+- `--output FILE` — write to file instead of stdout
+- `--llm openai|anthropic` — LLM-enhanced extraction
+- `--llm-model MODEL` — override the default model name
 
 ---
 
@@ -96,19 +187,32 @@ Flags:
 report-differ/
 ├── requirements.txt
 ├── README.md
-├── summary.md              ← this file
+├── summary.md                   ← this file
 ├── report_differ/
 │   ├── __init__.py
-│   ├── __main__.py          # enables `python -m report_differ`
-│   ├── extractors.py        # document parsing → DocumentContent
-│   ├── redactor.py          # PII detection & masking
-│   ├── differ.py            # structural diff engine
-│   ├── summariser.py        # neutral summary generation
-│   ├── llm_analyser.py      # Phase 2 — LLM-enhanced analysis
-│   └── cli.py               # CLI argument handling & orchestration
+│   ├── __main__.py              # enables `python -m report_differ`
+│   ├── extractors.py            # document parsing → DocumentContent
+│   ├── redactor.py              # PII detection & masking
+│   ├── differ.py                # structural diff engine
+│   ├── summariser.py            # diff summary generation
+│   ├── report_summariser.py     # single-report summary (code-based)
+│   ├── llm_analyser.py          # LLM-enhanced diff analysis (API)
+│   ├── llm_report_summariser.py # LLM-enhanced report summary (API)
+│   ├── metric_extractor.py      # KPI / metric extraction (code-based)
+│   ├── llm_metric_extractor.py  # LLM-enhanced metric extraction (API)
+│   ├── cli.py                   # CLI for diff command
+│   ├── summarise_report.py      # CLI for summarise command
+│   └── extract_metrics.py       # CLI for metric extraction
+├── prompts/
+│   ├── phase2_prompt.md             # copy-paste prompt for diff analysis
+│   ├── generate_prompt.py           # auto-generates diff analysis prompt
+│   ├── summarise_prompt.md          # copy-paste prompt for report summary
+│   ├── generate_summary_prompt.py   # auto-generates report summary prompt
+│   ├── metrics_prompt.md            # copy-paste prompt for metric extraction
+│   └── generate_metrics_prompt.py   # auto-generates metric extraction prompt
 └── tests/
-    ├── create_fixtures.py   # generates sample v1/v2 test files
-    └── fixtures/            # auto-generated .xlsx and .docx pairs
+    ├── create_fixtures.py       # generates sample test files
+    └── fixtures/                # auto-generated .xlsx and .docx pairs
 ```
 
 ---
@@ -128,21 +232,30 @@ report-differ/
 # Install dependencies
 pip install -r requirements.txt
 
-# Compare two PDFs (PII redacted by default)
-python -m report_differ old_report.pdf new_report.pdf
+# ── Diff (two-document comparison) ────────────────────
+python -m report_differ.cli old_report.pdf new_report.pdf
+python -m report_differ.cli v1.xlsx v2.xlsx --format json
+python -m report_differ.cli v1.docx v2.docx -o diff_summary.txt
+python -m report_differ.cli v1.xlsx v2.xlsx --llm openai
 
-# Compare Excel files, JSON output
-python -m report_differ v1.xlsx v2.xlsx --format json
+# Generate copy-paste prompt for GPT / Copilot Chat
+python prompts/generate_prompt.py v1.xlsx v2.xlsx > ready_to_paste.txt
 
-# Compare Word docs, write result to file
-python -m report_differ v1.docx v2.docx -o diff_summary.txt
+# ── Summarise (single-report overview) ────────────────
+python -m report_differ.summarise_report report.xlsx
+python -m report_differ.summarise_report report.pdf --format json
+python -m report_differ.summarise_report report.docx --llm openai
 
-# Skip PII redaction
-python -m report_differ old.xlsx new.xlsx --no-redact
+# Generate copy-paste prompt for GPT / Copilot Chat
+python prompts/generate_summary_prompt.py report.xlsx > ready_to_paste.txt
 
-# Phase 2 — LLM-enhanced analysis (requires API key in env)
-python -m report_differ v1.xlsx v2.xlsx --llm openai
-python -m report_differ v1.docx v2.docx --llm anthropic --llm-model claude-sonnet-4-20250514
+# ── Extract Metrics (KPIs and metadata) ──────────────
+python -m report_differ.extract_metrics report.xlsx
+python -m report_differ.extract_metrics deck.pptx --format json
+python -m report_differ.extract_metrics report.pdf --llm openai
+
+# Generate copy-paste prompt for GPT / Copilot Chat
+python prompts/generate_metrics_prompt.py report.xlsx > ready_to_paste.txt
 ```
 
 ---
@@ -154,6 +267,7 @@ python -m report_differ v1.docx v2.docx --llm anthropic --llm-model claude-sonne
 | `pdfplumber` | PDF text and table extraction | 1 |
 | `openpyxl` | Excel `.xlsx` reading | 1 |
 | `python-docx` | Word `.docx` reading | 1 |
+| `python-pptx` | PowerPoint `.pptx` reading | 1 |
 | `Pillow` | Image support (pdfplumber dependency) | 1 |
 | `openai` | OpenAI API client (optional) | 2 |
 | `anthropic` | Anthropic API client (optional) | 2 |
@@ -173,3 +287,50 @@ The `llm_analyser.py` module adds an optional AI layer on top of the mechanical 
 5. **Produce a structured summary** with an executive overview, categorised details, and a statistical breakdown.
 
 The LLM is used strictly as a formatting and arithmetic layer — the ground truth always comes from the mechanical diff. If the LLM call fails, the tool falls back to the standard mechanical summary automatically.
+
+### Phase 2 — Copy-Paste Workflow (no API key needed)
+
+If you prefer to use **ChatGPT**, **GitHub Copilot Chat**, or **Claude** via
+their web/IDE interfaces instead of setting up API keys, the `prompts/` folder
+provides everything you need:
+
+- **`prompts/phase2_prompt.md`** — the full prompt template with instructions.
+  Copy it, paste it into your LLM chat, and replace the placeholder with your
+  JSON diff output.
+
+- **`prompts/generate_prompt.py`** — a helper script that runs the mechanical
+  diff and embeds the results directly into the prompt, producing a single
+  ready-to-paste text blob:
+
+  ```bash
+  python prompts/generate_prompt.py v1.xlsx v2.xlsx > ready_to_paste.txt
+  ```
+
+  Then paste the contents of `ready_to_paste.txt` into ChatGPT, Copilot Chat,
+  or any other LLM interface.
+
+This gives you three ways to use Phase 2 for **both diff and summarise**:
+
+| Method | Requires API key? | How |
+|--------|-------------------|-----|
+| `--llm openai` | Yes (`OPENAI_API_KEY`) | Fully automated via CLI |
+| `--llm anthropic` | Yes (`ANTHROPIC_API_KEY`) | Fully automated via CLI |
+| `generate_prompt.py` / `generate_summary_prompt.py` | No | Generates prompt → you paste into GPT / Copilot Chat |
+
+---
+
+## Single-Report Summarisation
+
+The `report_summariser.py` module adds the ability to produce a factual overview
+of a single document.  The summary is purely extractive:
+
+- **Key factual lines** — every line containing numbers, currency, dates, or
+  percentages is surfaced verbatim.
+- **Table profiles** — location, headers, row count, and numeric column
+  statistics (min, max, sum).
+- **Full data** — tables with ≤ 20 rows are reproduced row-by-row.
+
+For higher accuracy, the `llm_report_summariser.py` module or the copy-paste
+prompt (`prompts/summarise_prompt.md`) can send the extracted data to an LLM
+with strict grounding rules that forbid hallucination and require every quoted
+number to appear verbatim in the source data.
